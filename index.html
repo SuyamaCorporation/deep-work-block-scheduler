@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ディープワーク・ブロックスケジューラー</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  *:focus-visible { outline: 2px solid #10b981; outline-offset: 2px; }
+  .block-btn { transition: background 0.15s, transform 0.1s; }
+  .block-btn:active { transform: scale(0.95); }
+</style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+<div class="max-w-3xl mx-auto px-4 py-8">
+  <h1 class="text-2xl font-bold text-emerald-400 mb-1">ディープワーク・ブロックスケジューラー</h1>
+  <p class="text-gray-400 text-sm mb-6">Cal Newport 式の集中作業時間を管理し週次トレンドを追跡</p>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
+    <div class="bg-gray-900 rounded-xl p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-gray-300">本日のスケジュール</h2>
+        <span id="todayDate" class="text-xs text-gray-500"></span>
+      </div>
+      <div class="text-xs text-gray-500 mb-2 flex gap-3">
+        <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded bg-emerald-600"></span>ディープ</span>
+        <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded bg-red-700"></span>会議/通知</span>
+        <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded bg-gray-600"></span>休憩</span>
+      </div>
+      <div id="timeBlocks" class="grid grid-cols-6 gap-1"></div>
+    </div>
+
+    <div class="bg-gray-900 rounded-xl p-4 space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">
+          本日のディープワーク目標: <span id="goalVal" class="text-emerald-400 font-bold">4</span> 時間
+        </label>
+        <input id="goalSlider" type="range" min="1" max="6" value="4" class="w-full accent-emerald-500" aria-label="目標時間">
+        <div class="flex justify-between text-xs text-gray-500 mt-1"><span>1h</span><span>6h</span></div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1" for="actualInput">実績入力（今日の実際のディープワーク時間）</label>
+        <div class="flex items-center gap-2">
+          <input id="actualInput" type="number" min="0" max="12" step="0.5" value=""
+            placeholder="例: 3.5"
+            class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white w-24 focus:border-emerald-500">
+          <span class="text-gray-400 text-sm">時間</span>
+          <button id="saveActualBtn" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded-lg text-sm transition">保存</button>
+        </div>
+      </div>
+      <div id="todaySummary" class="text-sm"></div>
+    </div>
+  </div>
+
+  <div class="bg-gray-900 rounded-xl p-5">
+    <h2 class="text-sm font-semibold text-gray-300 mb-4">週次ヒートマップ（過去7日間）</h2>
+    <div id="heatmap" class="overflow-x-auto"></div>
+    <div class="mt-3 flex gap-3 text-xs text-gray-500">
+      <span>少 → 多:</span>
+      <span class="flex gap-1 items-center">
+        <span class="inline-block w-5 h-5 rounded bg-gray-800 border border-gray-700"></span>
+        <span class="inline-block w-5 h-5 rounded bg-emerald-900"></span>
+        <span class="inline-block w-5 h-5 rounded bg-emerald-700"></span>
+        <span class="inline-block w-5 h-5 rounded bg-emerald-500"></span>
+        <span class="inline-block w-5 h-5 rounded bg-emerald-300"></span>
+      </span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const START_H = 6, END_H = 24, BLOCKS = END_H - START_H;
+  const TYPES = [null, 'deep', 'meeting', 'break'];
+  const TYPE_COLORS = { null:'bg-gray-800 hover:bg-gray-700', deep:'bg-emerald-600 hover:bg-emerald-500', meeting:'bg-red-700 hover:bg-red-600', break:'bg-gray-600 hover:bg-gray-500' };
+
+  function todayKey() { return new Date().toISOString().slice(0,10); }
+
+  function loadData() {
+    try { return JSON.parse(localStorage.getItem('deepwork_v1') || '{}'); } catch(e) { return {}; }
+  }
+  function saveData(d) { localStorage.setItem('deepwork_v1', JSON.stringify(d)); }
+
+  function getDay(key) {
+    const d = loadData();
+    return d[key] || { blocks: Array(BLOCKS).fill(null), goal: 4, actual: null };
+  }
+  function saveDay(key, day) {
+    const d = loadData();
+    d[key] = day;
+    // keep only last 30 days
+    const keys = Object.keys(d).sort();
+    while (keys.length > 30) { delete d[keys.shift()]; }
+    saveData(d);
+  }
+
+  const key = todayKey();
+  let day = getDay(key);
+
+  document.getElementById('todayDate').textContent = key;
+  document.getElementById('goalSlider').value = day.goal || 4;
+  document.getElementById('goalVal').textContent = day.goal || 4;
+  if (day.actual !== null && day.actual !== undefined) document.getElementById('actualInput').value = day.actual;
+
+  function renderBlocks() {
+    const el = document.getElementById('timeBlocks');
+    el.innerHTML = '';
+    for (let i = 0; i < BLOCKS; i++) {
+      const h = START_H + i;
+      const type = day.blocks[i];
+      const btn = document.createElement('button');
+      btn.className = `block-btn rounded text-xs py-2 ${TYPE_COLORS[type]} text-gray-300`;
+      btn.textContent = `${h}`;
+      btn.setAttribute('aria-label', `${h}時 ブロック種別: ${type || '未設定'}`);
+      btn.addEventListener('click', () => {
+        const cur = TYPES.indexOf(day.blocks[i]);
+        day.blocks[i] = TYPES[(cur + 1) % TYPES.length];
+        saveDay(key, day);
+        renderBlocks();
+        renderSummary();
+      });
+      el.appendChild(btn);
+    }
+  }
+
+  function renderSummary() {
+    const deepCount = day.blocks.filter(b => b === 'deep').length;
+    // Find contiguous deep sessions
+    let sessions = [], inSess = false, sessStart = 0;
+    day.blocks.forEach((b, i) => {
+      if (b === 'deep' && !inSess) { inSess = true; sessStart = i; }
+      if (b !== 'deep' && inSess) { sessions.push(i - sessStart); inSess = false; }
+    });
+    if (inSess) sessions.push(BLOCKS - sessStart);
+
+    const goal = parseInt(document.getElementById('goalSlider').value);
+    const pct = Math.min(100, Math.round((deepCount / goal) * 100));
+    const el = document.getElementById('todaySummary');
+    el.innerHTML = `
+      <div class="mb-2">
+        <div class="flex justify-between text-xs text-gray-400 mb-1">
+          <span>スケジュール上のディープワーク: ${deepCount}h</span>
+          <span>${pct}%</span>
+        </div>
+        <div class="w-full bg-gray-700 rounded-full h-2">
+          <div class="bg-emerald-500 h-2 rounded-full transition-all" style="width:${pct}%"></div>
+        </div>
+      </div>
+      <div class="text-xs text-gray-400">
+        セッション: ${sessions.map(s => `${s}h`).join(' / ') || 'なし'}
+      </div>
+    `;
+  }
+
+  function renderHeatmap() {
+    const data = loadData();
+    const el = document.getElementById('heatmap');
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      days.push(d.toISOString().slice(0,10));
+    }
+    const heat = days.map(k => {
+      const d = data[k];
+      if (!d) return { key: k, val: 0 };
+      const deep = d.blocks ? d.blocks.filter(b => b === 'deep').length : 0;
+      return { key: k, val: d.actual !== null && d.actual !== undefined ? parseFloat(d.actual) : deep };
+    });
+    const maxVal = Math.max(...heat.map(h => h.val), 1);
+
+    const table = document.createElement('table');
+    table.className = 'w-full text-xs';
+    const tbody = document.createElement('tbody');
+    const tr = document.createElement('tr');
+    heat.forEach(h => {
+      const td = document.createElement('td');
+      td.className = 'p-1 text-center';
+      const pct = h.val / maxVal;
+      let bg = 'bg-gray-800';
+      if (pct > 0) bg = pct < 0.25 ? 'bg-emerald-900' : pct < 0.5 ? 'bg-emerald-700' : pct < 0.75 ? 'bg-emerald-500' : 'bg-emerald-300';
+      const label = h.key.slice(5).replace('-', '/');
+      td.innerHTML = `<div class="w-10 h-10 mx-auto rounded ${bg} flex items-center justify-center text-gray-300 font-semibold">${h.val || '—'}</div><div class="mt-1 text-gray-500">${label}</div>`;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+    table.appendChild(tbody);
+    el.innerHTML = '';
+    el.appendChild(table);
+  }
+
+  document.getElementById('goalSlider').addEventListener('input', e => {
+    document.getElementById('goalVal').textContent = e.target.value;
+    day.goal = parseInt(e.target.value);
+    saveDay(key, day);
+    renderSummary();
+  });
+
+  document.getElementById('saveActualBtn').addEventListener('click', () => {
+    const val = parseFloat(document.getElementById('actualInput').value);
+    if (isNaN(val)) return;
+    day.actual = val;
+    saveDay(key, day);
+    renderHeatmap();
+    renderSummary();
+  });
+
+  renderBlocks();
+  renderSummary();
+  renderHeatmap();
+})();
+</script>
+</body>
+</html>
